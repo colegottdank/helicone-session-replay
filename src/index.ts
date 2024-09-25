@@ -145,50 +145,31 @@ async function handleEmbedding(
 }
 
 /**
- * Abstracted function to build the request tree.
+ * Main function to rerun the session.
  */
-function buildRequestTree(requests: ParsedRequestData[]): TreeNode[] {
-  const requestMap: Record<string, TreeNode> = {};
-  const roots: TreeNode[] = [];
+async function rerunSession(requests: ParsedRequestData[]) {
+  const newSessionId = randomUUID();
 
-  // Normalize paths and initialize the request map with empty children arrays
-  requests.forEach((request) => {
-    const normalizedPath =
-      request.path.replace(/\/+/g, "/").replace(/\/$/, "") || "/";
-    requestMap[normalizedPath] = {
-      ...request,
-      path: normalizedPath,
-      children: [],
-    };
-  });
+  // Sort the requests by created_at timestamp
+  requests.sort(
+    (a, b) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
 
-  // Build the tree by linking parents and children
-  Object.values(requestMap).forEach((node) => {
-    if (node.path === "/") {
-      roots.push(node); // Root node
-    } else {
-      const parentPath =
-        node.path.substring(0, node.path.lastIndexOf("/")) || "/";
-      const parentNode = requestMap[parentPath];
-      if (parentNode) {
-        parentNode.children.push(node);
-      } else {
-        roots.push(node); // In case parent is missing, consider as root
-      }
-    }
-  });
-
-  return roots;
+  // Process each request sequentially
+  for (const request of requests) {
+    await processSingleRequest(request, newSessionId);
+  }
 }
 
 /**
- * Abstracted function to process a request node.
+ * Processes a single request.
  */
-async function processRequestNode(
-  node: TreeNode,
+async function processSingleRequest(
+  request: ParsedRequestData,
   newSessionId: string
 ): Promise<void> {
-  const bodyResponse = await fetch(node.signed_body_url);
+  const bodyResponse = await fetch(request.signed_body_url);
   const bodyData = await bodyResponse.json();
   let requestBody: RequestBody = bodyData.request;
 
@@ -198,41 +179,17 @@ async function processRequestNode(
   const metadata: HeliconeMetadata = {
     sessionId: newSessionId,
     sessionName: SESSION_NAME,
-    path: node.path,
+    path: request.path,
   };
 
-  if (node.request_path.includes("chat/completions")) {
-    await handleChatCompletion(node.request_path, requestBody, metadata);
-  } else if (node.request_path.includes("embeddings")) {
-    await handleEmbedding(node.request_path, requestBody, metadata);
+  if (request.request_path.includes("chat/completions")) {
+    await handleChatCompletion(request.request_path, requestBody, metadata);
+  } else if (request.request_path.includes("embeddings")) {
+    await handleEmbedding(request.request_path, requestBody, metadata);
   } else {
-    console.log(`Unknown request type for ${node.path}`);
-  }
-
-  // Process children
-  for (const child of node.children) {
-    await processRequestNode(child, newSessionId);
+    console.log(`Unknown request type for ${metadata.path}`);
   }
 }
-
-/**
- * Main function to rerun the session.
- */
-async function rerunSession(requests: ParsedRequestData[]) {
-  const newSessionId = randomUUID();
-  const roots = buildRequestTree(requests);
-  console.log(`Roots: ${JSON.stringify(roots)}`);
-
-  // Start processing from the root nodes
-  for (const root of roots) {
-    await processRequestNode(root, newSessionId);
-  }
-}
-
-/**
- * Type definitions for TreeNode.
- */
-type TreeNode = ParsedRequestData & { children: TreeNode[] };
 
 /**
  * Entry point of the script.
